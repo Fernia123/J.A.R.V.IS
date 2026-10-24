@@ -16,11 +16,16 @@ package org.vosk.demo;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.media.AudioManager;
 import android.os.Bundle;
+import android.speech.tts.TextToSpeech;
 import android.text.method.ScrollingMovementMethod;
+import android.util.Log;
 import android.widget.Button;
 import android.widget.TextView;
+import android.widget.Toast;
 import android.widget.ToggleButton;
 
 import org.vosk.LibVosk;
@@ -34,6 +39,7 @@ import org.vosk.android.StorageService;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Locale;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
@@ -55,6 +61,9 @@ public class VoskActivity extends Activity implements
     private SpeechService speechService;
     private SpeechStreamService speechStreamService;
     private TextView resultView;
+
+    private TextToSpeech tts;
+    private boolean ttsListo = false;
 
     @Override
     public void onCreate(Bundle state) {
@@ -78,15 +87,17 @@ public class VoskActivity extends Activity implements
         } else {
             initModel();
         }
+        verificarServicioAccesibilidad();
+        inicializarVoz();
     }
 
     private void initModel() {
-        StorageService.unpack(this, "model-en-us", "model",
+        StorageService.unpack(this, "model-es", "model",
                 (model) -> {
                     this.model = model;
                     setUiState(STATE_READY);
                 },
-                (exception) -> setErrorState("Failed to unpack the model" + exception.getMessage()));
+                (exception) -> setErrorState("Failed to unpack the model: " + exception.getMessage()));
     }
 
 
@@ -97,12 +108,32 @@ public class VoskActivity extends Activity implements
 
         if (requestCode == PERMISSIONS_REQUEST_RECORD_AUDIO) {
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                // Recognizer initialization is a time-consuming and it involves IO,
+                // Recognizer initialization is time-consuming and involves IO,
                 // so we execute it in async task
                 initModel();
             } else {
                 finish();
             }
+        }
+    }
+
+    private void inicializarVoz() {
+        tts = new TextToSpeech(this, status -> {
+            if (status == TextToSpeech.SUCCESS) {
+                int resultado = tts.setLanguage(new Locale("es", "ES"));
+                if (resultado == TextToSpeech.LANG_MISSING_DATA || resultado == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    Log.e("TTS", "Idioma español no soportado");
+                } else {
+                    ttsListo = true;
+                    tts.setSpeechRate(1.0f); // velocidad normal
+                    tts.setPitch(1.0f);     // tono normal
+                }
+            }
+        });
+    }
+    private void hablar(String mensaje) {
+        if (ttsListo && tts != null) {
+            tts.speak(mensaje, TextToSpeech.QUEUE_FLUSH, null, null);
         }
     }
 
@@ -113,16 +144,118 @@ public class VoskActivity extends Activity implements
         if (speechService != null) {
             speechService.stop();
             speechService.shutdown();
+            speechService = null;
         }
 
         if (speechStreamService != null) {
             speechStreamService.stop();
+            speechStreamService = null;
+        }
+
+        if (model != null) {
+            model.close();
+            model = null;
+        }
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
         }
     }
 
     @Override
     public void onResult(String hypothesis) {
-        resultView.append(hypothesis + "\n");
+        // Esto ya debería estar (muestra el texto)
+        ((TextView) findViewById(R.id.result_text)).setText(hypothesis);
+
+        // --- NUEVO: Interpretar comandos ---
+        String texto = hypothesis.toLowerCase()
+                .replace("á", "a")
+                .replace("é", "e")
+                .replace("í", "i")
+                .replace("ó", "o")
+                .replace("ú", "u")
+                .replace("ü", "u")
+                .replaceAll("[^a-z\\s]", "")
+                .trim();
+
+        AsistenteAccessibilityService servicio = AsistenteAccessibilityService.getInstance();
+
+        if (texto.contains("whatsapp")) {
+            abrirApp("com.whatsapp");
+        }
+        else if (texto.contains("youtube") || texto.contains("you tube")) {
+            if (servicio != null) {
+                abrirApp("com.google.android.youtube");
+                hablar("Qué vera el día de hoy");
+            }
+        }
+        else if (texto.contains("chrome") || texto.contains("crom") || texto.contains("navegador")) {
+            if (servicio != null ) {
+                abrirApp("com.android.chrome");
+                hablar("¿Qué buscara el día de hoy señor?");
+            }
+
+        }
+        else if (texto.contains("instagram") || texto.contains("insta")) {
+            abrirApp("com.instagram.android");
+        }
+        else if (texto.contains("configuracion") || texto.contains("ajustes") || texto.contains("settings")) {
+            startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS));
+        }
+// ===== Comandos con Accessibility Service =====
+        else if (texto.contains("inicio") || texto.contains("home") || texto.contains("pantalla de inicio")) {
+            if (servicio != null) {
+                servicio.irAInicio();
+            } else {
+                irAInicio(); // respaldo
+            }
+        }
+        else if (texto.contains("atras") || texto.contains("volver") || texto.contains("regresar")) {
+            if (servicio != null) {
+                servicio.irAtras();
+            }
+        }
+        else if (texto.contains("recientes") || texto.contains("aplicaciones recientes") || texto.contains("multitarea")) {
+            if (servicio != null) {
+                servicio.abrirRecientes();
+            }
+        }
+        else if (texto.contains("notificaciones") || texto.contains("panel de notificaciones")) {
+            if (servicio != null) {
+                servicio.abrirNotificaciones();
+            }
+        }
+        else if (texto.contains("bloquear") || texto.contains("bloquea la pantalla") || texto.contains("apaga la pantalla")) {
+            if (servicio != null) {
+                servicio.bloquearPantalla();
+            }
+        }
+        else if (texto.contains("captura") || texto.contains("screenshot") || texto.contains("captura de pantalla")) {
+            if (servicio != null) {
+                servicio.capturaPantalla();
+            }
+        }
+        else if (texto.contains("sube") && texto.contains("volumen")) {
+            ajustarVolumen(true);
+        }
+        else if (texto.contains("baja") && texto.contains("volumen")) {
+            ajustarVolumen(false);
+        }
+        else if (texto.startsWith("toca ") || texto.startsWith("presiona ") || texto.startsWith("haz clic en ") || texto.startsWith("click en ")) {
+            if (servicio != null) {
+                String textoATocar = texto
+                        .replace("toca ", "")
+                        .replace("presiona ", "")
+                        .replace("haz clic en ", "")
+                        .replace("click en ", "")
+                        .trim();
+
+                boolean exito = servicio.tocarTexto(textoATocar);
+                if (!exito) {
+                    Toast.makeText(this, "No encontré el botón: " + textoATocar, Toast.LENGTH_SHORT).show();
+                }
+            }
+        }
     }
 
     @Override
@@ -207,8 +340,7 @@ public class VoskActivity extends Activity implements
         } else {
             setUiState(STATE_FILE);
             try {
-                Recognizer rec = new Recognizer(model, 16000.f, "[\"one zero zero zero one\", " +
-                        "\"oh zero one two three four five six seven eight nine\", \"[unk]\"]");
+                Recognizer rec = new Recognizer(model, 16000.0f);
 
                 InputStream ais = getAssets().open(
                         "10001-90210-01803.wav");
@@ -246,4 +378,59 @@ public class VoskActivity extends Activity implements
         }
     }
 
+    private void abrirApp(String packageName) {
+        try {
+            Intent intent = getPackageManager().getLaunchIntentForPackage(packageName);
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+            } else {
+                // Intento alternativo
+                Intent intent2 = new Intent(Intent.ACTION_MAIN);
+                intent2.addCategory(Intent.CATEGORY_LAUNCHER);
+                intent2.setPackage(packageName);
+                intent2.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+                if (intent2.resolveActivity(getPackageManager()) != null) {
+                    startActivity(intent2);
+                } else {
+                    Toast.makeText(this, "No se encontró la aplicación: " + packageName, Toast.LENGTH_LONG).show();
+                }
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "Error al abrir: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            e.printStackTrace();
+        }
+    }
+
+    private void ajustarVolumen(boolean subir) {
+        AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (subir) {
+            audioManager.adjustVolume(AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI);
+        } else {
+            audioManager.adjustVolume(AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI);
+        }
+    }
+
+    private void irAInicio() {
+        Intent intent = new Intent(Intent.ACTION_MAIN);
+        intent.addCategory(Intent.CATEGORY_HOME);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(intent);
+    }
+
+    private void verificarServicioAccesibilidad() {
+        if (AsistenteAccessibilityService.getInstance() == null) {
+            // El servicio no está activado
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("Permiso necesario")
+                    .setMessage("Para que el asistente pueda controlar el celular, debes activar el servicio de accesibilidad.")
+                    .setPositiveButton("Activar", (dialog, which) -> {
+                        Intent intent = new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);
+                        startActivity(intent);
+                    })
+                    .setNegativeButton("Cancelar", null)
+                    .show();
+        }
+    }
 }

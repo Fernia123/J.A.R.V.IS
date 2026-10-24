@@ -13,5 +13,6 @@
     <string name="stop_file">Stop File</string>
     <string name="pause">Pause</string>
     <string name="continueRecognition">Continue</string>
+    <string name="descripcion_accesibilidad">Servicio necesario para que el asistente de voz pueda controlar el teléfono (abrir aplicaciones, tocar botones, etc.).</string>
 
 </resources>
