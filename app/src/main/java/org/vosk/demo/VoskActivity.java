@@ -61,6 +61,10 @@ public class VoskActivity extends Activity implements
     private SpeechService speechService;
     private SpeechStreamService speechStreamService;
     private TextView resultView;
+    private boolean modoComando = false;
+    private static final String PALABRA_CLAVE = "jarvis";
+    private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable desactivarModoComando;
 
     private TextToSpeech tts;
     private boolean ttsListo = false;
@@ -141,6 +145,10 @@ public class VoskActivity extends Activity implements
     public void onDestroy() {
         super.onDestroy();
 
+        if (desactivarModoComando != null) {
+            handler.removeCallbacks(desactivarModoComando);
+        }
+
         if (speechService != null) {
             speechService.stop();
             speechService.shutdown();
@@ -164,10 +172,8 @@ public class VoskActivity extends Activity implements
 
     @Override
     public void onResult(String hypothesis) {
-        // Esto ya debería estar (muestra el texto)
         ((TextView) findViewById(R.id.result_text)).setText(hypothesis);
 
-        // --- NUEVO: Interpretar comandos ---
         String texto = hypothesis.toLowerCase()
                 .replace("á", "a")
                 .replace("é", "e")
@@ -178,85 +184,145 @@ public class VoskActivity extends Activity implements
                 .replaceAll("[^a-z\\s]", "")
                 .trim();
 
+        if (texto.isEmpty()) {
+            return;
+        }
+
+        if (!modoComando) {
+            if (texto.contains(PALABRA_CLAVE)) {
+                activarModoComando();
+            }
+            return;
+        }
+
+        procesarComando(texto);
+    }
+
+    private void procesarComando(String texto) {
         AsistenteAccessibilityService servicio = AsistenteAccessibilityService.getInstance();
 
+        // 1. Abrir Aplicaciones
         if (texto.contains("whatsapp")) {
             abrirApp("com.whatsapp");
+            hablar("Abriendo WhatsApp");
         }
         else if (texto.contains("youtube") || texto.contains("you tube")) {
-            if (servicio != null) {
-                abrirApp("com.google.android.youtube");
-                hablar("Qué vera el día de hoy");
-            }
+            abrirApp("com.google.android.youtube");
+            hablar("Abriendo YouTube, ¿qué verá hoy?");
         }
         else if (texto.contains("chrome") || texto.contains("crom") || texto.contains("navegador")) {
-            if (servicio != null ) {
-                abrirApp("com.android.chrome");
-                hablar("¿Qué buscara el día de hoy señor?");
-            }
-
+            abrirApp("com.android.chrome");
+            hablar("Abriendo el navegador");
         }
         else if (texto.contains("instagram") || texto.contains("insta")) {
             abrirApp("com.instagram.android");
+            hablar("Abriendo Instagram");
         }
         else if (texto.contains("configuracion") || texto.contains("ajustes") || texto.contains("settings")) {
             startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS));
+            hablar("Abriendo configuración");
         }
-// ===== Comandos con Accessibility Service =====
+
+        // 2. Acciones del Sistema (Accessibility Service)
         else if (texto.contains("inicio") || texto.contains("home") || texto.contains("pantalla de inicio")) {
             if (servicio != null) {
                 servicio.irAInicio();
             } else {
                 irAInicio(); // respaldo
             }
+            hablar("Yendo a la pantalla de inicio");
         }
         else if (texto.contains("atras") || texto.contains("volver") || texto.contains("regresar")) {
             if (servicio != null) {
                 servicio.irAtras();
             }
+            hablar("Volviendo atrás");
         }
         else if (texto.contains("recientes") || texto.contains("aplicaciones recientes") || texto.contains("multitarea")) {
             if (servicio != null) {
                 servicio.abrirRecientes();
             }
+            hablar("Abriendo aplicaciones recientes");
         }
         else if (texto.contains("notificaciones") || texto.contains("panel de notificaciones")) {
             if (servicio != null) {
                 servicio.abrirNotificaciones();
             }
+            hablar("Abriendo panel de notificaciones");
         }
         else if (texto.contains("bloquear") || texto.contains("bloquea la pantalla") || texto.contains("apaga la pantalla")) {
             if (servicio != null) {
                 servicio.bloquearPantalla();
             }
+            hablar("Bloqueando la pantalla");
         }
         else if (texto.contains("captura") || texto.contains("screenshot") || texto.contains("captura de pantalla")) {
             if (servicio != null) {
                 servicio.capturaPantalla();
             }
+            hablar("Tomando captura de pantalla");
         }
-        else if (texto.contains("sube") && texto.contains("volumen")) {
-            ajustarVolumen(true);
-        }
-        else if (texto.contains("baja") && texto.contains("volumen")) {
-            ajustarVolumen(false);
-        }
-        else if (texto.startsWith("toca ") || texto.startsWith("presiona ") || texto.startsWith("haz clic en ") || texto.startsWith("click en ")) {
-            if (servicio != null) {
-                String textoATocar = texto
-                        .replace("toca ", "")
-                        .replace("presiona ", "")
-                        .replace("haz clic en ", "")
-                        .replace("click en ", "")
-                        .trim();
 
-                boolean exito = servicio.tocarTexto(textoATocar);
-                if (!exito) {
-                    Toast.makeText(this, "No encontré el botón: " + textoATocar, Toast.LENGTH_SHORT).show();
+        // 3. Ajustes de Volumen
+        else if ((texto.contains("sube") || texto.contains("subir")) && texto.contains("volumen")) {
+            ajustarVolumen(true);
+            hablar("Subiendo el volumen");
+        }
+        else if ((texto.contains("baja") || texto.contains("bajar")) && texto.contains("volumen")) {
+            ajustarVolumen(false);
+            hablar("Bajando el volumen");
+        }
+
+        // 4. Desplazamiento en Pantalla (Scroll)
+        else if (texto.contains("desplazate hacia abajo") || texto.contains("desliza hacia abajo") || texto.contains("scroll down") || texto.equals("baja") || texto.contains("baja pantalla")) {
+            if (servicio != null) {
+                servicio.desplazarAbajo();
+            }
+            hablar("Desplazando hacia abajo");
+        }
+        else if (texto.contains("desplazate hacia arriba") || texto.contains("desliza hacia arriba") || texto.contains("scroll up") || texto.equals("sube") || texto.contains("sube pantalla")) {
+            if (servicio != null) {
+                servicio.desplazarArriba();
+            }
+            hablar("Desplazando hacia arriba");
+        }
+
+        // 5. Escritura y Borrado de Texto
+        else if (texto.startsWith("escribe ") || texto.startsWith("escribir ")) {
+            String mensaje = texto.replace("escribe ", "").replace("escribir ", "").trim();
+            if (servicio != null) {
+                boolean exito = servicio.escribirTexto(mensaje);
+                hablar(exito ? "Escribiendo " + mensaje : "No encontré un campo de texto");
+            }
+        }
+        else if (texto.contains("borra el texto") || texto.contains("borrar texto") || texto.contains("limpia el texto")) {
+            if (servicio != null) {
+                servicio.borrarTexto();
+            }
+            hablar("Texto borrado");
+        }
+
+        // 6. Tocados e interacción táctil por texto
+        else if (texto.startsWith("toca ") || texto.startsWith("presiona ") || texto.startsWith("haz clic en ") || texto.startsWith("click en ")) {
+            String objetivo = texto
+                    .replace("toca ", "")
+                    .replace("presiona ", "")
+                    .replace("haz clic en ", "")
+                    .replace("click en ", "")
+                    .trim();
+
+            if (servicio != null) {
+                boolean exito = servicio.tocarTexto(objetivo);
+                if (exito) {
+                    hablar("Tocando " + objetivo);
+                } else {
+                    hablar("No encontré " + objetivo);
+                    Toast.makeText(this, "No encontré el botón: " + objetivo, Toast.LENGTH_SHORT).show();
                 }
             }
         }
     }
+
 
     @Override
     public void onFinalResult(String hypothesis) {
@@ -418,6 +484,26 @@ public class VoskActivity extends Activity implements
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(intent);
     }
+
+    private void activarModoComando() {
+        modoComando = true;
+        hablar("Dime");
+
+        // Cancelar temporizador anterior si existe
+        if (desactivarModoComando != null) {
+            handler.removeCallbacks(desactivarModoComando);
+        }
+
+        // Después de 8 segundos vuelve a modo espera
+        desactivarModoComando = () -> {
+            modoComando = false;
+            // Opcional: hablar("Modo espera");
+        };
+        handler.postDelayed(desactivarModoComando, 8000); // 8 segundos
+    }
+
+
+
 
     private void verificarServicioAccesibilidad() {
         if (AsistenteAccessibilityService.getInstance() == null) {

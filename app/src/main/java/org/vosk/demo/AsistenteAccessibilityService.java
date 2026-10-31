@@ -1,12 +1,11 @@
 package org.vosk.demo;
 
 import android.accessibilityservice.AccessibilityService;
-import android.accessibilityservice.GestureDescription;
-import android.graphics.Path;
+import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
-import android.util.Log;
 
 public class AsistenteAccessibilityService extends AccessibilityService {
 
@@ -64,15 +63,20 @@ public class AsistenteAccessibilityService extends AccessibilityService {
 
     // Bloquear pantalla
     public void bloquearPantalla() {
-        performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN);
+        }
     }
 
     // Tomar captura de pantalla
     public void capturaPantalla() {
-        performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT);
+        }
     }
 
-    // Toca un elemento que contenga el texto indicado
+    // ==================== CONTROL DE PANTALLA ====================
+
     public boolean tocarTexto(String textoBuscado) {
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) {
@@ -86,24 +90,32 @@ public class AsistenteAccessibilityService extends AccessibilityService {
         return resultado;
     }
 
-    // Función recursiva que busca el texto en todos los elementos
     private boolean buscarYTocar(AccessibilityNodeInfo node, String textoBuscado) {
         if (node == null) return false;
 
-        // Revisar el texto del nodo actual
         CharSequence textoNodo = node.getText();
         CharSequence descripcion = node.getContentDescription();
 
         String texto = textoNodo != null ? textoNodo.toString().toLowerCase() : "";
         String desc = descripcion != null ? descripcion.toString().toLowerCase() : "";
 
-        if ((texto.contains(textoBuscado) || desc.contains(textoBuscado)) && node.isClickable()) {
-            node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-            Log.d("AsistenteService", "Se tocó: " + textoBuscado);
-            return true;
+        if (texto.contains(textoBuscado) || desc.contains(textoBuscado)) {
+            if (node.isClickable()) {
+                node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                Log.d("AsistenteService", "Se tocó: " + textoBuscado);
+                return true;
+            }
+            // Si el nodo no es clickable, intentamos hacer clic en el padre
+            AccessibilityNodeInfo padre = node.getParent();
+            if (padre != null && padre.isClickable()) {
+                padre.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                padre.recycle();
+                Log.d("AsistenteService", "Se tocó padre de: " + textoBuscado);
+                return true;
+            }
+            if (padre != null) padre.recycle();
         }
 
-        // Buscar en los hijos
         for (int i = 0; i < node.getChildCount(); i++) {
             AccessibilityNodeInfo hijo = node.getChild(i);
             if (buscarYTocar(hijo, textoBuscado)) {
@@ -112,7 +124,70 @@ public class AsistenteAccessibilityService extends AccessibilityService {
             }
             if (hijo != null) hijo.recycle();
         }
-
         return false;
+    }
+
+    // Desplazarse hacia abajo
+    public void desplazarAbajo() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root != null) {
+            root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+            root.recycle();
+        }
+    }
+
+    // Desplazarse hacia arriba
+    public void desplazarArriba() {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root != null) {
+            root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+            root.recycle();
+        }
+    }
+
+    // Escribir texto en el campo que esté enfocado
+    public boolean escribirTexto(String texto) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) return false;
+
+        AccessibilityNodeInfo focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+        if (focused == null) {
+            // Buscar el primer campo editable
+            focused = buscarCampoEditable(root);
+        }
+
+        if (focused != null && focused.isEditable()) {
+            Bundle arguments = new Bundle();
+            arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, texto);
+            boolean exito = focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments);
+            focused.recycle();
+            root.recycle();
+            return exito;
+        }
+
+        if (focused != null) focused.recycle();
+        root.recycle();
+        return false;
+    }
+
+    private AccessibilityNodeInfo buscarCampoEditable(AccessibilityNodeInfo node) {
+        if (node == null) return null;
+        if (node.isEditable()) return node;
+
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo hijo = node.getChild(i);
+            AccessibilityNodeInfo resultado = buscarCampoEditable(hijo);
+            if (resultado != null) {
+                if (hijo != null && hijo != resultado) hijo.recycle();
+                return resultado;
+            }
+            if (hijo != null) hijo.recycle();
+        }
+        return null;
+    }
+
+    // Borrar el texto del campo enfocado
+    public void borrarTexto() {
+        escribirTexto("");
     }
 }
